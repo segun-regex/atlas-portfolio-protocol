@@ -164,7 +164,3 @@ This README template:
 
 For complete implementation details, refer to inline contract comments and test cases.
 ```
-
-```
-
-```
