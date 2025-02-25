@@ -100,3 +100,104 @@
         needs-rebalance: (> (- stacks-block-height (get last-rebalanced portfolio)) u144)
     }))
 )
+
+;; Private Functions
+(define-private (validate-token-id (portfolio-id uint) (token-id uint))
+    (let (
+        (portfolio (unwrap! (get-portfolio portfolio-id) false))
+    )
+    (and
+        (< token-id MAX-TOKENS-PER-PORTFOLIO)
+        (< token-id (get token-count portfolio))
+        true
+    ))
+)
+
+(define-private (validate-percentage (percentage uint))
+    (and (>= percentage u0) (<= percentage BASIS-POINTS))
+)
+
+(define-private (validate-portfolio-percentages (percentages (list 10 uint)))
+    (fold check-percentage-sum percentages true)
+)
+
+(define-private (check-percentage-sum (current-percentage uint) (valid bool))
+    (and valid (validate-percentage current-percentage))
+)
+
+(define-private (add-to-user-portfolios (user principal) (portfolio-id uint))
+    (let (
+        (current-portfolios (get-user-portfolios user))
+        (new-portfolios (unwrap! (as-max-len? (append current-portfolios portfolio-id) u20) ERR-USER-STORAGE-FAILED))
+    )
+    (map-set UserPortfolios user new-portfolios)
+    (ok true))
+)
+
+(define-private (initialize-portfolio-asset (index uint) (token principal) (percentage uint) (portfolio-id uint))
+    (if (>= percentage u0)
+        (begin
+            (map-set PortfolioAssets
+                {portfolio-id: portfolio-id, token-id: index}
+                {
+                    target-percentage: percentage,
+                    current-amount: u0,
+                    token-address: token
+                }
+            )
+            (ok true))
+        ERR-INVALID-TOKEN
+    )
+)
+
+;; Public Functions
+(define-public (create-portfolio (initial-tokens (list 10 principal)) (percentages (list 10 uint)))
+    (let (
+        (portfolio-id (+ (var-get portfolio-counter) u1))
+        (token-count (len initial-tokens))
+        (percentage-count (len percentages))
+        (token-0 (element-at? initial-tokens u0))
+        (token-1 (element-at? initial-tokens u1))
+        (percentage-0 (element-at? percentages u0))
+        (percentage-1 (element-at? percentages u1))
+    )
+    (asserts! (<= token-count MAX-TOKENS-PER-PORTFOLIO) ERR-MAX-TOKENS-EXCEEDED)
+    (asserts! (is-eq token-count percentage-count) ERR-LENGTH-MISMATCH)
+    (asserts! (validate-portfolio-percentages percentages) ERR-INVALID-PERCENTAGE)
+
+    ;; Create portfolio
+    (map-set Portfolios portfolio-id
+        {
+            owner: tx-sender,
+            created-at: stacks-block-height,
+            last-rebalanced: stacks-block-height,
+            total-value: u0,
+            active: true,
+            token-count: token-count
+        }
+    )
+
+    ;; Validate tokens and percentages
+    (asserts! (and (is-some token-0) (is-some token-1)) ERR-INVALID-TOKEN)
+    (asserts! (and (is-some percentage-0) (is-some percentage-1)) ERR-INVALID-PERCENTAGE)
+
+    ;; Initialize portfolio assets
+    (try! (initialize-portfolio-asset 
+        u0 
+        (unwrap-panic token-0)
+        (unwrap-panic percentage-0)
+        portfolio-id))
+
+    (try! (initialize-portfolio-asset 
+        u1
+        (unwrap-panic token-1)
+        (unwrap-panic percentage-1)
+        portfolio-id))
+
+    ;; Update user's portfolio list
+    (try! (add-to-user-portfolios tx-sender portfolio-id))
+
+    ;; Increment counter
+    (var-set portfolio-counter portfolio-id)
+    (ok portfolio-id))
+)
